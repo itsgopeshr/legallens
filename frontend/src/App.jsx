@@ -10,7 +10,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
 
-  const BACKEND_URL = `http://${window.location.hostname}:8000/api/scan-label`;
+  const BACKEND_URL = "https://legallens-api-0wew.onrender.com/api/scan-label";
 
   const handleCapture = (e) => {
     const file = e.target.files[0];
