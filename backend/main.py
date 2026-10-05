@@ -58,13 +58,21 @@ def analyze_label(text: str) -> Dict[str, Any]:
                 mrp_val = float(mrp_match.group(1))
 
     # 2. Net Quantity Extraction (Catches both 'Net 200ml' and '200ml Net')
+    # 2. Net Quantity Extraction (Catches both 'Net 200ml' and '200ml Net')
     net_qty_val = None
     net_qty_unit = None
+    
     qty_match = re.search(r'(?:NET\s*(?:WT|QTY|VOL|VOLUME)?[:.]?\s*)(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\b', text_clean)
     if not qty_match:
         qty_match = re.search(r'[\^#]?\s*(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\s*(?:NET|VOL|QTY)?\b', text_clean)
     if not qty_match:
-        qty_match = re.search(r'\b(\d{2,4})\s*(ML|G|GM)\b', text_clean)
+        # Fallback for standalone weights
+        temp_match = re.search(r'\b(\d{2,4})\s*(ML|G|GM)\b', text_clean)
+        # Prevent extracting nutritional "per serve (35g)" or "100g" tables
+        if temp_match:
+            context = text_clean[max(0, temp_match.start() - 15):temp_match.end()]
+            if "SERVE" not in context and "ENERGY" not in context:
+                qty_match = temp_match
 
     if qty_match:
         net_qty_val = float(qty_match.group(1))
