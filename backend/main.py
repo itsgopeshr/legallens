@@ -8,6 +8,7 @@ from typing import Dict, Any
 
 app = FastAPI(title="LegalLens AI - Dynamic OCR Engine")
 
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,14 +17,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "LegalLens OCR API"}
+
 def compute_quality_score(cv_img: np.ndarray) -> int:
-    gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-    variance = cv2.Laplacian(gray, cv2.CV_64F).var()
-    return int(min(max((variance / 5.0), 35.0), 98.0))
+    try:
+        gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+        variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+        return int(min(max((variance / 5.0), 35.0), 98.0))
+    except Exception:
+        return 85
 
 def preprocess_image(cv_img: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-    # Enhance contrast for curved packaging and small text
+    # Resize if too large to prevent high CPU / memory stalls on cloud
+    height, width = gray.shape[:2]
+    if width > 1000:
+        scale = 1000 / width
+        gray = cv2.resize(gray, (1000, int(height * scale)))
+    
     enhanced = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2
     )
@@ -45,7 +59,7 @@ def analyze_label(text: str) -> Dict[str, Any]:
     
     # 2. Auto-Detect Category
     cosmetic_keywords = ['aqua', 'sulfate', 'parfum', 'external use', 'shampoo', 'soap', 'lotion']
-    food_keywords = ['sugar', 'carbohydrate', 'protein', 'fat', 'kcal', 'energy', 'ingredients', 'fssai']
+    food_keywords = ['sugar', 'carbohydrate', 'protein', 'fat', 'kcal', 'energy', 'ingredients', 'fssai', 'sucrose', 'dextrose']
     
     category = "general"
     if any(k.upper() in text_clean for k in cosmetic_keywords):
@@ -63,7 +77,7 @@ def analyze_label(text: str) -> Dict[str, Any]:
 
     declared_usp_str = f"₹{declared_usp_match.group(1)}/{declared_usp_match.group(2).lower()}" if declared_usp_match else None
 
-    # 4. Violation Engine
+    # 4. Violations Engine
     violations = []
     
     if not mrp_val:
@@ -76,9 +90,8 @@ def analyze_label(text: str) -> Dict[str, Any]:
         if not declared_usp_str:
             violations.append(f"G.S.R. 226(E): Unit Sale Price not explicitly declared (Expected: {expected_usp_str}).")
         else:
-            # Check if declared USP matches calculated USP mathematically
             declared_val = float(declared_usp_match.group(1))
-            if abs(declared_val - calculated_usp) > 0.05: # Allow small rounding margin
+            if abs(declared_val - calculated_usp) > 0.05:
                 violations.append(f"G.S.R. 226(E): USP mathematical mismatch (Declared: {declared_usp_str}, True: {expected_usp_str}).")
 
     if not mfg_match:
@@ -90,7 +103,6 @@ def analyze_label(text: str) -> Dict[str, Any]:
     if category == "cosmetic" and "EXTERNAL USE" not in text_clean:
         violations.append("D&C Rules: Mandatory 'For External Use Only' caution missing for topical product.")
 
-    # 5. Build Response
     return {
         "status": "COMPLIANT" if len(violations) == 0 else "NON-COMPLIANT",
         "category": category,
@@ -119,21 +131,41 @@ def analyze_label(text: str) -> Dict[str, Any]:
 
 @app.post("/api/scan-label")
 async def scan_label(file: UploadFile = File(...)):
-    contents = await file.read()
-    nparr = np.frombuffer(contents, np.uint8)
-    cv_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    
-    if cv_img is None:
-        return {"status": "NON-COMPLIANT", "violations": ["Invalid image format"], "raw_text": ""}
+    try:
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        cv_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if cv_img is None:
+            return {"status": "NON-COMPLIANT", "violations": ["Invalid image file payload"], "raw_text": ""}
 
-    quality_score = compute_quality_score(cv_img)
-    processed = preprocess_image(cv_img)
-    
-    # Extract Text (Try standard, then fallback to high-contrast raw)
-    raw_ocr_text = pytesseract.image_to_string(processed)
-    if len(raw_ocr_text.strip()) < 15:
-        raw_ocr_text = pytesseract.image_to_string(cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY))
+        quality_score = compute_quality_score(cv_img)
+        processed = preprocess_image(cv_img)
+        
+        # Execute OCR safely
+        try:
+            raw_ocr_text = pytesseract.image_to_string(processed)
+            if len(raw_ocr_text.strip()) < 15:
+                gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+                raw_ocr_text = pytesseract.image_to_string(gray)
+        except Exception as ocr_err:
+            raw_ocr_text = f"OCR Error: {str(ocr_err)}"
 
-    report = analyze_label(raw_ocr_text)
-    report["optical_score"] = quality_score
-    return report
+        report = analyze_label(raw_ocr_text)
+        report["optical_score"] = quality_score
+        return report
+
+    except Exception as e:
+        return {
+            "status": "NON-COMPLIANT",
+            "category": "general",
+            "violations": [f"Server processing exception: {str(e)}"],
+            "checklist": {
+                "mrp": {"value": "Missing", "status": "FAIL"},
+                "net_quantity": {"value": "Missing", "status": "FAIL"},
+                "usp": {"declared": "Missing", "calculated": "N/A", "status": "FAIL"},
+                "manufacturing_date": {"value": "Missing", "status": "FAIL"}
+            },
+            "raw_text": "",
+            "optical_score": 75
+        }
