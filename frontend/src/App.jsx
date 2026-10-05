@@ -192,7 +192,7 @@ const ScanPage = () => {
   // BACKEND TARGET: Change to your Render URL for production deployment.
   // Currently set to your tethered local IP matching Python uvicorn port 10000.
   // =========================================================================
-  const BACKEND_URL = "https://legallens-api-0wew.onrender.com/api/scan-label"; 
+  const BACKEND_URL = "https://legallens-370y.onrender.com/api/scan-label"; 
 
   useEffect(() => {
     if (location.state?.directFile) {
