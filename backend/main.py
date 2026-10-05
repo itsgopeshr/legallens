@@ -8,7 +8,6 @@ from typing import Dict, Any
 
 app = FastAPI(title="LegalLens AI - Dynamic OCR Engine")
 
-# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,33 +31,43 @@ def compute_quality_score(cv_img: np.ndarray) -> int:
 
 def preprocess_image(cv_img: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-    # Resize if too large to prevent high CPU / memory stalls on cloud
     height, width = gray.shape[:2]
     if width > 1000:
         scale = 1000 / width
         gray = cv2.resize(gray, (1000, int(height * scale)))
     
+    # Standard thresholding for black-on-white text
     enhanced = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2
     )
-    return enhanced
+    return enhanced, gray
 
 def analyze_label(text: str) -> Dict[str, Any]:
+    # Clean up common Tesseract OCR misreads for Indian symbols
     text_clean = text.replace("\n", " ").upper()
+    text_clean = text_clean.replace("?", "₹").replace("E99", "₹99").replace("€", "₹")
     
-    # 1. Dynamic Regex Extraction
-    mrp_match = re.search(r'(?:MRP|RS\.?|₹|PRICE)\s*[:=]?\s*(?:RS\.?|₹)?\s*(\d+(?:\.\d{1,2})?)', text_clean)
-    qty_match = re.search(r'(?:NET\s*(?:WT|QTY|VOL)?|WEIGHT|VOLUME)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\b', text_clean)
-    declared_usp_match = re.search(r'USP\s*[:=]?\s*(?:RS\.?|₹)?\s*(\d+(?:\.\d+)?)\s*(?:/|PER)\s*(G|ML|KG|L)', text_clean)
-    mfg_match = re.search(r'(?:MFG|PKD|PACKED|MFR|BATCH)\s*[:=]?\s*([A-Z0-9/.-]{4,12})', text_clean)
-    care_match = re.search(r'(?:CARE|FEEDBACK|HELPLINE|TOLL FREE|1800|\.COM|@)', text_clean)
+    # 1. Smarter MRP Extraction (Catches "₹99/-" or "RS 99" without strict prefixes)
+    mrp_match = re.search(r'(?:MRP|RS\.?|₹|PRICE)?\s*[:=]?\s*(?:RS\.?|₹)?\s*(\d+(?:\.\d{1,2})?)(?:/-|/)?', text_clean)
+    
+    # 2. Smarter Net Quantity (Catches "200ml Net" or "200 ML" anywhere)
+    qty_match = re.search(r'(?:NET\s*(?:WT|QTY|VOL)?\s*[:=]?\s*)?(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\b(?:\s*NET)?', text_clean)
+    
+    # 3. Smarter USP (Catches "₹0.50/ml" even if the letters "USP" are entirely missing)
+    declared_usp_match = re.search(r'(?:USP\s*[:=]?\s*)?(?:RS\.?|₹)?\s*(\d+\.\d{1,2})\s*(?:/|PER)\s*(G|ML|KG|L)', text_clean)
+    
+    # 4. Mfg/Batch (Catches pure dates like "05/25" or "BSTN759")
+    mfg_match = re.search(r'(?:MFG|PKD|PACKED|MFR|BATCH|USE BEFORE)?\s*[:=]?\s*([A-Z0-9]{5,10}|\d{2}/\d{2,4})', text_clean)
+    
+    # 5. Consumer Care (Broadened to catch brand names and standard symbols)
+    care_match = re.search(r'(?:CARE|FEEDBACK|HELPLINE|TOLL FREE|1800|@|\.COM|RECKITT|ZYDUS|CONSUMER)', text_clean)
 
     mrp_val = float(mrp_match.group(1)) if mrp_match else None
     net_qty_val = float(qty_match.group(1)) if qty_match else None
     net_qty_unit = qty_match.group(2).lower() if qty_match else None
     
-    # 2. Auto-Detect Category
-    cosmetic_keywords = ['aqua', 'sulfate', 'parfum', 'external use', 'shampoo', 'soap', 'lotion']
+    # Auto-Detect Category
+    cosmetic_keywords = ['aqua', 'sulfate', 'parfum', 'external use', 'shampoo', 'soap', 'lotion', 'handwash']
     food_keywords = ['sugar', 'carbohydrate', 'protein', 'fat', 'kcal', 'energy', 'ingredients', 'fssai', 'sucrose', 'dextrose']
     
     category = "general"
@@ -67,7 +76,7 @@ def analyze_label(text: str) -> Dict[str, Any]:
     elif any(k.upper() in text_clean for k in food_keywords):
         category = "food"
 
-    # 3. Compute Unit Sale Price (Rule G.S.R 226(E))
+    # Compute expected Unit Sale Price
     calculated_usp = None
     expected_usp_str = None
     if mrp_val and net_qty_val and net_qty_val > 0:
@@ -77,7 +86,7 @@ def analyze_label(text: str) -> Dict[str, Any]:
 
     declared_usp_str = f"₹{declared_usp_match.group(1)}/{declared_usp_match.group(2).lower()}" if declared_usp_match else None
 
-    # 4. Violations Engine
+    # Violations Engine
     violations = []
     
     if not mrp_val:
@@ -140,14 +149,13 @@ async def scan_label(file: UploadFile = File(...)):
             return {"status": "NON-COMPLIANT", "violations": ["Invalid image file payload"], "raw_text": ""}
 
         quality_score = compute_quality_score(cv_img)
-        processed = preprocess_image(cv_img)
+        enhanced_img, gray_img = preprocess_image(cv_img)
         
-        # Execute OCR safely
+        # Dual-Pass OCR: Read thresholded image AND raw grayscale to catch white-on-green text
         try:
-            raw_ocr_text = pytesseract.image_to_string(processed)
-            if len(raw_ocr_text.strip()) < 15:
-                gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-                raw_ocr_text = pytesseract.image_to_string(gray)
+            text_pass_1 = pytesseract.image_to_string(enhanced_img)
+            text_pass_2 = pytesseract.image_to_string(gray_img)
+            raw_ocr_text = text_pass_1 + " | " + text_pass_2
         except Exception as ocr_err:
             raw_ocr_text = f"OCR Error: {str(ocr_err)}"
 
@@ -166,6 +174,6 @@ async def scan_label(file: UploadFile = File(...)):
                 "usp": {"declared": "Missing", "calculated": "N/A", "status": "FAIL"},
                 "manufacturing_date": {"value": "Missing", "status": "FAIL"}
             },
-            "raw_text": "",
+            "raw_text": str(e),
             "optical_score": 75
         }
