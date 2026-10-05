@@ -279,7 +279,7 @@ const ScanPage = () => {
     
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout for true OCR
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 12s timeout for true OCR
 
       const res = await fetch(BACKEND_URL, { 
         method: 'POST', 
