@@ -1,14 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Camera, Upload, Moon, Sun, ShieldCheck, HeartPulse, 
-  Info, Home, RefreshCw, CheckCircle2, AlertTriangle,
-  Globe, History, FileDown, ExternalLink
+  Info, Home, CheckCircle2, AlertTriangle,
+  Globe, History, FileDown, ExternalLink, Zap
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import confetti from 'canvas-confetti';
 import Tesseract from 'tesseract.js';
+
+// --- Background AI Pre-loader (Prevents freezing on bad Wi-Fi) ---
+let aiWorker = null;
+const initAI = async () => {
+  if (!aiWorker) {
+    try {
+      aiWorker = await Tesseract.createWorker('eng', 1);
+      console.log("Edge AI pre-loaded successfully.");
+    } catch (e) { console.warn("Background AI load failed, will retry on scan."); }
+  }
+};
 
 // --- Client-Side Image Preprocessing ---
 const compressImage = (file) => {
@@ -24,10 +35,8 @@ const compressImage = (file) => {
         const scaleSize = MAX_WIDTH / img.width;
         canvas.width = scaleSize < 1 ? MAX_WIDTH : img.width;
         canvas.height = scaleSize < 1 ? img.height * scaleSize : img.height;
-        
         const ctx = canvas.getContext('2d');
-        // Aggressive contrast to cut through glossy plastic glare
-        ctx.filter = 'contrast(1.5) brightness(1.1) grayscale(100%)';
+        ctx.filter = 'contrast(1.4) brightness(1.1) grayscale(100%)';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob((blob) => resolve(blob ? new File([blob], "capture.jpg", { type: "image/jpeg" }) : file), 'image/jpeg', 0.9);
       };
@@ -36,48 +45,42 @@ const compressImage = (file) => {
   });
 };
 
-// --- Flawless OSINT Web Crawler with OCR Autocorrect ---
+// --- OSINT Crawler with Local Caching (Prevents API Blocks) ---
 const fetchLiveWebData = async (text) => {
-  // 1. The "Boring Word" Filter: Ignore generic packaging terms so we only get real ingredients
-  const stopwords = [
-    'NUTRITION', 'NUTRITIONAL', 'INFORMATION', 'INGREDIENTS', 'AQUA', 'WATER', 'MRP', 'NET', 'QTY', 'VOL', 
-    'USE', 'BEFORE', 'BATCH', 'MFG', 'PRICE', 'CONSUMER', 'CARE', 'LTD', 'PVT', 'INDIA', 'LIMITED', 
-    'SERVE', 'SERVING', 'PACK', 'TOTAL', 'MANUFACTURED', 'MARKETED', 'REGD', 'OFFICE', 'DETAILS', 
-    'COMPOSITION', 'APPROX', 'VALUE', 'DIETARY', 'RECOMMENDED', 'ALLOWANCE', 'ENERGY', 'PROTEIN', 
-    'CARBOHYDRATE', 'SUGARS', 'FAT', 'SATURATED', 'TRANS', 'CHOLESTEROL', 'STORE', 'COOL', 'DRY', 
-    'PLACE', 'AWAY', 'SUNLIGHT', 'KCAL', 'GMS', 'WEIGHT', 'VOLUME', 'TAXES', 'INCLUSIVE', 'PRODUCTS'
-  ];
-
-  // Clean text and extract words longer than 5 letters
+  const stopwords = ['NUTRITION', 'INFORMATION', 'INGREDIENTS', 'AQUA', 'WATER', 'MRP', 'NET', 'QTY', 'VOL', 'USE', 'BEFORE', 'BATCH', 'MFG', 'PRICE', 'CONSUMER', 'CARE', 'LTD', 'PVT', 'INDIA', 'LIMITED', 'SERVE', 'TOTAL', 'MANUFACTURED', 'MARKETED', 'DETAILS', 'COMPOSITION', 'APPROX', 'VALUE', 'DIETARY', 'RECOMMENDED', 'ENERGY', 'PROTEIN', 'CARBOHYDRATE', 'SUGARS', 'FAT', 'SATURATED', 'CHOLESTEROL', 'STORE', 'COOL', 'DRY', 'PLACE', 'AWAY', 'SUNLIGHT', 'KCAL', 'GMS', 'WEIGHT', 'VOLUME', 'TAXES'];
   const rawWords = text.toUpperCase().replace(/[^A-Z]/g, ' ').split(/\s+/).filter(w => w.length > 5);
-  
-  // Filter out the boring words to leave only chemicals, brands, and ingredients
   const keywords = [...new Set(rawWords.filter(w => !stopwords.includes(w)))].slice(0, 3);
   
   if (keywords.length === 0) return [];
   const results = [];
   
   for (const keyword of keywords) {
+    // Check Cache First
+    const cached = localStorage.getItem(`osint_${keyword}`);
+    if (cached) {
+      results.push(JSON.parse(cached));
+      continue;
+    }
+
     try {
-      // 2. OCR Autocorrect: Ping Wikipedia's search engine to fix typos (e.g. "PHOSPHONSS" -> "Phosphorus")
       const searchRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${keyword}&utf8=&format=json&origin=*`);
       const searchData = await searchRes.json();
 
-      if (searchData.query && searchData.query.search.length > 0) {
-        // Get the properly spelled title from Wikipedia
+      if (searchData.query?.search?.length > 0) {
         const autocorrectedTitle = searchData.query.search[0].title;
-
-        // 3. Fetch the actual scientific definition
         const summaryRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(autocorrectedTitle)}`);
+        
         if (summaryRes.ok) {
           const summaryData = await summaryRes.json();
-          // Ensure we don't push duplicates
           if (summaryData.extract && !results.some(r => r.title === summaryData.title)) {
-            results.push({
+            const finalData = {
               title: summaryData.title,
               body: summaryData.extract.substring(0, 220) + '...',
               link: summaryData.content_urls?.desktop?.page || '#'
-            });
+            };
+            // Save to Cache
+            localStorage.setItem(`osint_${keyword}`, JSON.stringify(finalData));
+            results.push(finalData);
           }
         }
       }
@@ -89,21 +92,14 @@ const fetchLiveWebData = async (text) => {
 // --- On-Device Rules Engine ---
 const analyzeLabelJS = async (rawText) => {
   let text = rawText.replace(/\n/g, " ").toUpperCase();
-  // Fix common Tesseract currency misreads
   text = text.replace(/[\?*€]/g, '₹').replace(/\bE(\d{2,4})\b/g, '₹$1');
 
   let mrpVal = null, netQtyVal = null, netQtyUnit = null, declaredVal = null, declaredUspStr = null, mfgDate = null;
 
-  // Ultra-Fuzzy MRP Matcher
-  const mrpMatch = text.match(/(?:MRP|M\.R\.P\.?|RETAIL\s*PRICE)?\D{0,10}(?:RS\.?|₹|R\$)\s*[A-Z]?[:=.]?\s*(\d{2,5}(?:\.\d{1,2})?)/) || 
-                   text.match(/\b(\d{2,5})\s*\/-/);
+  const mrpMatch = text.match(/(?:MRP|M\.R\.P\.?|RETAIL\s*PRICE)?\D{0,10}(?:RS\.?|₹|R\$)\s*[A-Z]?[:=.]?\s*(\d{2,5}(?:\.\d{1,2})?)/) || text.match(/\b(\d{2,5})\s*\/-/);
   if (mrpMatch) mrpVal = parseFloat(mrpMatch[1]);
 
-  // Quantity Matcher (Filters out nutritional tables)
-  const qtyMatch = text.match(/(?:NET\s*(?:WT|QTY|VOL|VOLUME)?[:.]?\s*)(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\b/) || 
-                   text.match(/[\^#]?\s*(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\s*(?:NET|VOL|QTY)?\b/) || 
-                   text.match(/\b(\d{2,4})\s*(ML|G|GM)\b/);
-  
+  const qtyMatch = text.match(/(?:NET\s*(?:WT|QTY|VOL|VOLUME)?[:.]?\s*)(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\b/) || text.match(/[\^#]?\s*(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\s*(?:NET|VOL|QTY)?\b/) || text.match(/\b(\d{2,4})\s*(ML|G|GM)\b/);
   if (qtyMatch) {
     const context = text.substring(Math.max(0, qtyMatch.index - 20), qtyMatch.index);
     if (!context.includes('SERVE') && !context.includes('ENERGY') && !context.includes('PER PACK')) {
@@ -112,7 +108,6 @@ const analyzeLabelJS = async (rawText) => {
     }
   }
 
-  // USP Matcher
   let calculatedUsp = null, expectedUspStr = null;
   if (mrpVal && netQtyVal && netQtyVal > 0) {
     const baseUnit = netQtyUnit === 'g' ? 'g' : 'ml';
@@ -125,7 +120,6 @@ const analyzeLabelJS = async (rawText) => {
     declaredUspStr = `₹${declaredVal.toFixed(2)}/${uspMatch[2].toLowerCase()}`;
   }
 
-  // Dates Matcher
   const dateMatch = text.match(/\b(0[1-9]|1[0-2])[\/\-](\d{2,4})\b/) || text.match(/\b(BSTN\w+|LOT\w+|B\.\s*NO\w*)\b/);
   if (dateMatch) mfgDate = dateMatch[0];
 
@@ -136,16 +130,15 @@ const analyzeLabelJS = async (rawText) => {
   else if (/(SUGAR|CARBOHYDRATE|PROTEIN|FAT|KCAL|ENERGY|INGREDIENTS|FSSAI|SUCROSE|DEXTROSE)/.test(text)) category = "food";
 
   const violations = [];
-  if (!mrpVal) violations.push("Rule 6(1)(e): Maximum Retail Price (MRP) missing or obscured by glare.");
+  if (!mrpVal) violations.push("Rule 6(1)(e): Maximum Retail Price (MRP) missing.");
   if (!netQtyVal) violations.push("Rule 6(1)(b): Standard Net Quantity declaration missing.");
   if (mrpVal && netQtyVal) {
-    if (!declaredUspStr) violations.push(`G.S.R. 226(E): Unit Sale Price not explicitly stated (Expected: ${expectedUspStr}).`);
-    else if (declaredVal && Math.abs(declaredVal - calculatedUsp) > 0.06) violations.push(`G.S.R. 226(E): USP mismatch (Declared: ${declaredUspStr}, True: ${expectedUspStr}).`);
+    if (!declaredUspStr) violations.push(`G.S.R. 226(E): Unit Sale Price not explicitly stated.`);
+    else if (declaredVal && Math.abs(declaredVal - calculatedUsp) > 0.06) violations.push(`G.S.R. 226(E): USP mathematical mismatch.`);
   }
   if (!mfgDate) violations.push("Rule 6(1)(d): Month/Year of packing or Batch No. not detected.");
   if (!careMatch) violations.push("Rule 6(2): Consumer care contact channel not found.");
 
-  // TRIGGER THE WEB CRAWLER
   const webData = await fetchLiveWebData(text);
   const status = violations.length === 0 ? "COMPLIANT" : "NON-COMPLIANT";
 
@@ -166,7 +159,7 @@ const analyzeLabelJS = async (rawText) => {
 const Layout = ({ children }) => {
   const [isDark, setIsDark] = useState(false);
   const location = useLocation();
-  useEffect(() => document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light'), [isDark]);
+  useEffect(() => { document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light'); initAI(); }, [isDark]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', width: '100%' }}>
@@ -174,8 +167,8 @@ const Layout = ({ children }) => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <ShieldCheck size={26} color="var(--primary)" />
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ fontSize: '1.15rem', fontWeight: 800 }}>LegalLens AI</span><span style={{ fontSize: '0.62rem', background: 'var(--primary)', color: '#fff', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>OSINT</span></div>
-            <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>On-Device Web Crawler</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ fontSize: '1.15rem', fontWeight: 800 }}>LegalLens AI</span><span style={{ fontSize: '0.62rem', background: 'var(--primary)', color: '#fff', padding: '2px 6px', borderRadius: '4px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '2px' }}><Zap size={10}/> EDGE</span></div>
+            <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>On-Device OSINT Scanner</p>
           </div>
         </div>
         <button onClick={() => setIsDark(!isDark)} style={{ background: 'var(--bg-input)', border: 'none', color: 'var(--text-main)', padding: '8px', borderRadius: '50%', cursor: 'pointer' }}>{isDark ? <Sun size={20} /> : <Moon size={20} />}</button>
@@ -210,12 +203,12 @@ const HomePage = () => {
     <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div className="card" style={{ textAlign: 'center', padding: '26px 18px', background: 'linear-gradient(135deg, var(--bg-card) 0%, var(--bg-input) 100%)' }}>
         <h2 style={{ fontSize: '1.35rem', fontWeight: 800, marginBottom: '6px' }}>Live Product Auditing</h2>
-        <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Scan any packaging. Missing data is fetched live from Wikipedia OSINT.</p>
+        <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Scan packaging. Missing data is fetched live from Wikipedia OSINT.</p>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-        <input type="file" accept="image/*" capture="environment" id="home-camera" style={{ display: 'none' }} onChange={handleSelection} />
+        <input type="file" accept="image/jpeg, image/png" capture="environment" id="home-camera" style={{ display: 'none' }} onChange={handleSelection} />
         <label htmlFor="home-camera" className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', padding: '22px 10px', cursor: 'pointer' }}><div style={{ background: 'rgba(37, 99, 235, 0.1)', padding: '14px', borderRadius: '50%' }}><Camera size={30} color="var(--primary)" /></div><span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-main)' }}>Live Camera</span></label>
-        <input type="file" accept="image/*" id="home-upload" style={{ display: 'none' }} onChange={handleSelection} />
+        <input type="file" accept="image/jpeg, image/png" id="home-upload" style={{ display: 'none' }} onChange={handleSelection} />
         <label htmlFor="home-upload" className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', padding: '22px 10px', cursor: 'pointer' }}><div style={{ background: 'rgba(37, 99, 235, 0.1)', padding: '14px', borderRadius: '50%' }}><Upload size={30} color="var(--primary)" /></div><span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-main)' }}>Upload Image</span></label>
       </div>
     </div>
@@ -228,6 +221,7 @@ const ScanPage = () => {
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [progress, setProgress] = useState(0);
+  const [confidence, setConfidence] = useState(0);
   const [report, setReport] = useState(null);
   const [activeTab, setActiveTab] = useState('web');
 
@@ -250,29 +244,32 @@ const ScanPage = () => {
 
   const executeScan = async (file) => {
     setPreview(URL.createObjectURL(file));
-    setLoading(true); setReport(null); setProgress(0);
+    setLoading(true); setReport(null); setProgress(0); setConfidence(0);
     setStatusMsg('Warming up Edge AI...');
 
     try {
-      const worker = await Tesseract.createWorker('eng', 1, {
+      if (!aiWorker) await initAI();
+      const worker = aiWorker || await Tesseract.createWorker('eng', 1);
+      
+      const { data } = await worker.recognize(file, {
         logger: m => {
           if (m.status === 'recognizing text') {
             setProgress(m.progress);
-            setStatusMsg(`Scanning Package: ${Math.round(m.progress * 100)}%`);
+            setStatusMsg(`Extracting Text: ${Math.round(m.progress * 100)}%`);
           }
         }
       });
-      const { data: { text } } = await worker.recognize(file);
-      await worker.terminate();
-
+      
+      setConfidence(Math.round(data.confidence));
       setStatusMsg('OSINT Web Crawling...');
-      const finalReport = await analyzeLabelJS(text);
+      const finalReport = await analyzeLabelJS(data.text);
+      
       setReport(finalReport);
       saveAuditLog(finalReport);
       if (finalReport.status === 'COMPLIANT') confetti();
 
     } catch (err) {
-      setStatusMsg("Failed to process image.");
+      setStatusMsg("Lens dirty or glare detected. Try again.");
     } finally {
       setLoading(false);
     }
@@ -320,9 +317,9 @@ const ScanPage = () => {
           <h3 style={{ marginBottom: '8px' }}>Scan Packaging</h3>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '24px' }}>Ensure good lighting. Avoid glare on plastic wrappers.</p>
           <div style={{ display: 'flex', gap: '12px' }}>
-            <input type="file" accept="image/*" capture="environment" onChange={handleManualSelection} style={{ display: 'none' }} id="cam-input-scan" />
+            <input type="file" accept="image/jpeg, image/png" capture="environment" onChange={handleManualSelection} style={{ display: 'none' }} id="cam-input-scan" />
             <label htmlFor="cam-input-scan" style={{ background: 'var(--primary)', color: '#fff', padding: '10px 18px', borderRadius: '8px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}><Camera size={18}/> Camera</label>
-            <input type="file" accept="image/*" onChange={handleManualSelection} style={{ display: 'none' }} id="upload-input-scan" />
+            <input type="file" accept="image/jpeg, image/png" onChange={handleManualSelection} style={{ display: 'none' }} id="upload-input-scan" />
             <label htmlFor="upload-input-scan" style={{ background: 'var(--bg-input)', color: 'var(--text-main)', padding: '10px 18px', borderRadius: '8px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}><Upload size={18}/> Upload</label>
           </div>
         </div>
@@ -345,7 +342,17 @@ const ScanPage = () => {
 
           {!loading && report && (
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div style={{ display: 'flex', background: 'var(--bg-input)', borderRadius: '8px', padding: '3px' }}>
+              
+              {/* AI Confidence Metric */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                <span>AI Optical Confidence</span>
+                <span style={{ color: confidence > 70 ? 'var(--success)' : 'var(--warning)' }}>{confidence}%</span>
+              </div>
+              <div style={{ width: '100%', height: '4px', background: 'var(--bg-input)', borderRadius: '2px', overflow: 'hidden', marginTop: '-8px' }}>
+                 <div style={{ width: `${confidence}%`, height: '100%', background: confidence > 70 ? 'var(--success)' : 'var(--warning)' }} />
+              </div>
+
+              <div style={{ display: 'flex', background: 'var(--bg-input)', borderRadius: '8px', padding: '3px', marginTop: '4px' }}>
                 <button onClick={() => setActiveTab('web')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: 'none', background: activeTab === 'web' ? 'var(--primary)' : 'transparent', fontWeight: 700, fontSize: '0.76rem', color: activeTab === 'web' ? '#fff' : 'var(--text-muted)', cursor: 'pointer' }}>🌍 OSINT Data</button>
                 <button onClick={() => setActiveTab('audit')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: 'none', background: activeTab === 'audit' ? 'var(--bg-card)' : 'transparent', fontWeight: 700, fontSize: '0.76rem', color: activeTab === 'audit' ? 'var(--text-main)' : 'var(--text-muted)', cursor: 'pointer' }}>Checklist</button>
                 <button onClick={() => setActiveTab('raw')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: 'none', background: activeTab === 'raw' ? 'var(--bg-card)' : 'transparent', fontWeight: 700, fontSize: '0.76rem', color: activeTab === 'raw' ? 'var(--text-main)' : 'var(--text-muted)', cursor: 'pointer' }}>Raw OCR</button>
@@ -362,7 +369,7 @@ const ScanPage = () => {
                       <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{item.body}</p>
                       <a href={item.link} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px', textDecoration: 'none', fontWeight: 600, marginTop: '4px' }}>Verify Source <ExternalLink size={12} /></a>
                     </div>
-                  )) : <div style={{ fontSize: '0.75rem', color: 'var(--warning)', padding: '10px', background: 'var(--bg-input)', borderRadius: '6px' }}>Could not extract reliable search keywords. Tip: Try flattening the plastic wrapper to reduce light glare.</div>}
+                  )) : <div style={{ fontSize: '0.75rem', color: 'var(--warning)', padding: '10px', background: 'var(--bg-input)', borderRadius: '6px' }}>Could not extract reliable search keywords. Tip: Flatten the plastic wrapper to reduce light glare.</div>}
                 </div>
               )}
 
@@ -375,7 +382,6 @@ const ScanPage = () => {
                      <div style={{ fontSize: '0.75rem', color: 'var(--danger)', display: 'flex', flexDirection: 'column', gap: '4px', background: 'var(--danger-bg)', padding: '10px', borderRadius: '8px' }}>
                        <strong style={{marginBottom: '4px'}}>Contraventions / Notes:</strong>
                        {report.violations.map((v, i) => <span key={i}>• {v}</span>)}
-                       <span style={{ marginTop: '4px', color: '#b91c1c', fontStyle: 'italic' }}>Note: If values are missing, try scanning the flat bottom panel where prices are ink-stamped.</span>
                      </div>
                   )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem' }}>
