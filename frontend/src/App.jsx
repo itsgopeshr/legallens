@@ -45,8 +45,8 @@ const fileToBase64 = (file) => {
 };
 
 const runGeminiVisionAudit = async (base64Image, apiKey) => {
-  // Use the active model path
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const cleanKey = apiKey.trim();
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;
 
   const prompt = `
 You are a senior enforcement officer under the Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011) in India.
@@ -92,7 +92,10 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
 
   const res = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'x-goog-api-key': cleanKey
+    },
     body: JSON.stringify(payload)
   });
 
@@ -444,8 +447,9 @@ export default function App() {
   const [inputKey, setInputKey] = useState(apiKey);
 
   const saveKey = () => {
-    localStorage.setItem('gemini_api_key', inputKey.trim());
-    setApiKey(inputKey.trim());
+    const trimmed = inputKey.trim();
+    localStorage.setItem('gemini_api_key', trimmed);
+    setApiKey(trimmed);
     setShowKeyModal(false);
   };
 
@@ -468,11 +472,11 @@ export default function App() {
               <Key size={20} color="var(--primary)"/> Configure Vision AI Key
             </h3>
             <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              Paste your newly generated Google AI Studio API key here. It will be stored safely in your phone's browser memory only.
+              Paste your Google AI Studio API key below. It will be stored only inside your browser's private local storage.
             </p>
             <input 
-              type="password" 
-              placeholder="AIzaSy..." 
+              type="text" 
+              placeholder="Paste AQ... key here" 
               value={inputKey} 
               onChange={(e) => setInputKey(e.target.value)} 
               style={{ padding: '10px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '0.85rem' }}
