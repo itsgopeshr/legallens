@@ -18,7 +18,7 @@ const fileToBase64 = (file) => {
       img.src = event.target.result;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_DIM = 1200;
+        const MAX_DIM = 800; // Reduced from 1200 for faster transmission & low token weight
         let width = img.width;
         let height = img.height;
 
@@ -35,7 +35,7 @@ const fileToBase64 = (file) => {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
 
-        const base64Data = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+        const base64Data = canvas.toDataURL('image/jpeg', 0.75).split(',')[1];
         resolve(base64Data);
       };
       img.onerror = reject;
