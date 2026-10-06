@@ -47,23 +47,7 @@ const fileToBase64 = (file) => {
 };
 
 const runGeminiVisionAudit = async (base64Image) => {
-  // 1. Discover the exact model supported by this API key
-  let targetModel = "gemini-2.5-flash";
-  try {
-    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`);
-    if (listRes.ok) {
-      const listData = await listRes.json();
-      const available = listData.models?.map(m => m.name.replace("models/", "")) || [];
-      const best = available.find(m => m.includes("2.5-flash")) || 
-                   available.find(m => m.includes("flash")) || 
-                   available.find(m => m.includes("gemini"));
-      if (best) targetModel = best;
-    }
-  } catch (e) {
-    console.warn("Model auto-discovery skipped, using default:", targetModel);
-  }
-
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${GEMINI_API_KEY}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${GEMINI_API_KEY}`;
 
   const prompt = `
 You are a senior enforcement officer under the Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011) in India.
@@ -147,7 +131,6 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
     intelligence: parsed.productIntelligence || "Product verified against Legal Metrology Schedule."
   };
 };
-
 const Layout = ({ children }) => {
   const [isDark, setIsDark] = useState(false);
   const location = useLocation();
