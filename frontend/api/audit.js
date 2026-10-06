@@ -48,42 +48,57 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
 }
 `;
 
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inlineData: { mimeType: 'image/jpeg', data: base64Image } }
-            ]
+  // Fallback cascade to bypass momentary Google capacity spikes
+  const candidateModels = [
+    "gemini-3.8-flash",
+    "gemini-2.5-flash-latest",
+    "gemini-2.5-pro",
+    "gemini-flash-latest"
+  ];
+
+  let lastErrorMessage = '';
+
+  for (const model of candidateModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType: 'image/jpeg', data: base64Image } }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json'
           }
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json'
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (textOutput) {
+          return res.status(200).json(JSON.parse(textOutput));
         }
-      })
-    });
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      return res.status(response.status).json({ error: err.error?.message || `Google API error HTTP ${response.status}` });
+      } else {
+        const err = await response.json().catch(() => ({}));
+        lastErrorMessage = err.error?.message || `HTTP ${response.status}`;
+        // If it's high demand (503/429), the loop automatically proceeds to the next candidate model
+        continue;
+      }
+    } catch (e) {
+      lastErrorMessage = e.message;
+      continue;
     }
-
-    const data = await response.json();
-    const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!textOutput) {
-      return res.status(502).json({ error: 'No output generated from Vision model.' });
-    }
-
-    return res.status(200).json(JSON.parse(textOutput));
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
   }
+
+  return res.status(503).json({ 
+    error: `All Vision endpoints currently overloaded: ${lastErrorMessage}. Please re-scan in a moment.` 
+  });
 }
