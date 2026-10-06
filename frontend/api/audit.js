@@ -50,65 +50,56 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
 }
 `;
 
-  // Targeting models with distinct server pools
-  const models = [
-    "gemini-1.5-flash-8b",
-    "gemini-1.5-flash",
-    "gemini-2.5-flash"
-  ];
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
 
+  // Retry up to 3 times with exponential backoff if Google has a momentary load spike
   let lastError = '';
-
-  for (const model of models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: prompt },
-                  { inlineData: { mimeType: 'image/jpeg', data: base64Image } }
-                ]
-              }
-            ],
-            generationConfig: {
-              temperature: 0.1,
-              responseMimeType: 'application/json',
-              maxOutputTokens: 1000
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType: 'image/jpeg', data: base64Image } }
+              ]
             }
-          })
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-          const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (textOutput) {
-            return res.status(200).json(JSON.parse(textOutput));
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+            maxOutputTokens: 1000
           }
-        }
+        })
+      });
 
-        lastError = data.error?.message || `HTTP ${response.status}`;
-        
-        // If throttled (503 high demand or 429 rate limit), pause briefly before retrying
-        if (response.status === 503 || response.status === 429) {
-          await sleep(1200);
-          continue;
-        } else {
-          break; // Break attempt loop on non-capacity errors and check next model
+      const data = await response.json();
+
+      if (response.ok) {
+        const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (textOutput) {
+          return res.status(200).json(JSON.parse(textOutput));
         }
-      } catch (err) {
-        lastError = err.message;
-        await sleep(1000);
       }
+
+      lastError = data.error?.message || `HTTP ${response.status}`;
+
+      // If overloaded (503) or rate-limited (429), wait and retry
+      if (response.status === 503 || response.status === 429) {
+        await sleep(attempt * 2000); // Wait 2s, then 4s
+        continue;
+      } else {
+        // Any other error (bad payload, invalid key), exit immediately
+        return res.status(response.status).json({ error: lastError });
+      }
+    } catch (err) {
+      lastError = err.message;
+      await sleep(attempt * 2000);
     }
   }
 
-  return res.status(503).json({
-    error: `Model service temporarily saturated. Please retry your scan: ${lastError}`
-  });
+  return res.status(503).json({ error: lastError });
 }
