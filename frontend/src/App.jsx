@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Camera, Upload, Moon, Sun, ShieldCheck, 
   Info, Home, CheckCircle2, AlertTriangle,
-  History, FileDown, Sparkles, Key
+  History, FileDown, Sparkles
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import confetti from 'canvas-confetti';
@@ -44,75 +44,19 @@ const fileToBase64 = (file) => {
   });
 };
 
-const runGeminiVisionAudit = async (base64Image, apiKey) => {
-  const cleanKey = apiKey.trim();
-
-  // Pure endpoint without ?key= parameter to allow Bearer authentication
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;
-
-  const prompt = `
-You are a senior enforcement officer under the Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011) in India.
-Analyze this packaging image and extract statutory declarations precisely:
-1. Product/Brand Name (e.g., Glucon-D, Dettol).
-2. Category: Exactly "food", "cosmetic", or "general".
-3. Maximum Retail Price (MRP): Numerical value in Rupees (e.g., ₹435.00 or ₹99.00). Look for printed ink stamps, bottom flaps, or labels.
-4. Net Quantity: Net weight or volume (e.g., "1 kg", "200 ml"). Do NOT confuse with serving sizes like "per serve 35g".
-5. Declared Unit Sale Price (USP): As per G.S.R. 226(E) (e.g., ₹0.44/g or ₹0.50/ml).
-6. Manufacturing / Packaging Date / Batch No.
-7. Product Intelligence: A concise 2-sentence factual overview of the product, ingredients, and key legal declarations.
-
-Return ONLY a valid JSON object matching this schema without markdown fences:
-{
-  "productName": "string",
-  "category": "food" | "cosmetic" | "general",
-  "mrp": "string with currency, e.g., ₹435.00, or null",
-  "mrpValue": number or null,
-  "netQuantity": "string, e.g., 1 kg, 200 ml, or null",
-  "netQuantityValue": number or null,
-  "netQuantityUnit": "string, e.g., g, ml, or null",
-  "declaredUsp": "string or null",
-  "mfgDate": "string or null",
-  "violations": ["string list of missing or invalid declarations under PCR 2011"],
-  "productIntelligence": "string summary"
-}
-`;
-
-  const payload = {
-    contents: [
-      {
-        parts: [
-          { text: prompt },
-          { inlineData: { mimeType: "image/jpeg", data: base64Image } }
-        ]
-      }
-    ],
-    generationConfig: {
-      temperature: 0.1,
-      responseMimeType: "application/json"
-    }
-  };
-
-  // Provide both Bearer and x-goog-api-key headers without URL parameters
-  const res = await fetch(endpoint, {
+const runGeminiVisionAudit = async (base64Image) => {
+  const res = await fetch('/api/audit', {
     method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${cleanKey}`,
-      'x-goog-api-key': cleanKey
-    },
-    body: JSON.stringify(payload)
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base64Image })
   });
 
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || `API Error: HTTP ${res.status}`);
+    throw new Error(errData?.error || `Server returned HTTP ${res.status}`);
   }
 
-  const data = await res.json();
-  const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!textOutput) throw new Error("No output received from the Vision AI.");
-
-  const parsed = JSON.parse(textOutput);
+  const parsed = await res.json();
 
   let computedUsp = null;
   if (parsed.mrpValue && parsed.netQuantityValue && parsed.netQuantityValue > 0) {
@@ -138,7 +82,7 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
   };
 };
 
-const Layout = ({ children, onOpenKeyModal }) => {
+const Layout = ({ children }) => {
   const [isDark, setIsDark] = useState(false);
   const location = useLocation();
 
@@ -159,14 +103,9 @@ const Layout = ({ children, onOpenKeyModal }) => {
             <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>SIH26034 Metrology Auditor</p>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button onClick={onOpenKeyModal} title="Configure API Key" style={{ background: 'var(--bg-input)', border: 'none', color: 'var(--text-main)', padding: '8px', borderRadius: '50%', cursor: 'pointer' }}>
-            <Key size={18} />
-          </button>
-          <button onClick={() => setIsDark(!isDark)} style={{ background: 'var(--bg-input)', border: 'none', color: 'var(--text-main)', padding: '8px', borderRadius: '50%', cursor: 'pointer' }}>
-            {isDark ? <Sun size={20} /> : <Moon size={20} />}
-          </button>
-        </div>
+        <button onClick={() => setIsDark(!isDark)} style={{ background: 'var(--bg-input)', border: 'none', color: 'var(--text-main)', padding: '8px', borderRadius: '50%', cursor: 'pointer' }}>
+          {isDark ? <Sun size={20} /> : <Moon size={20} />}
+        </button>
       </header>
 
       <main style={{ flex: 1, position: 'relative' }}>
@@ -234,7 +173,7 @@ const HomePage = () => {
   );
 };
 
-const ScanPage = ({ apiKey, onRequireKey }) => {
+const ScanPage = () => {
   const location = useLocation();
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -257,21 +196,16 @@ const ScanPage = ({ apiKey, onRequireKey }) => {
   };
 
   const executeScan = async (file) => {
-    if (!apiKey) {
-      onRequireKey();
-      return;
-    }
-
     setPreview(URL.createObjectURL(file));
     setLoading(true);
     setReport(null);
-    setStatusMsg('Compressing & Preparing Image...');
+    setStatusMsg('Compressing Image...');
 
     try {
       const base64Data = await fileToBase64(file);
       setStatusMsg('AI Vision Auditing in Progress...');
       
-      const auditResult = await runGeminiVisionAudit(base64Data, apiKey);
+      const auditResult = await runGeminiVisionAudit(base64Data);
       setReport(auditResult);
       saveAuditLog(auditResult);
 
@@ -446,62 +380,16 @@ const AboutPage = () => {
 };
 
 export default function App() {
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
-  const [showKeyModal, setShowKeyModal] = useState(false);
-  const [inputKey, setInputKey] = useState(apiKey);
-
-  const saveKey = () => {
-    const trimmed = inputKey.trim();
-    localStorage.setItem('gemini_api_key', trimmed);
-    setApiKey(trimmed);
-    setShowKeyModal(false);
-  };
-
   return (
     <BrowserRouter>
-      <Layout onOpenKeyModal={() => setShowKeyModal(true)}>
+      <Layout>
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/scan" element={<ScanPage apiKey={apiKey} onRequireKey={() => setShowKeyModal(true)} />} />
+          <Route path="/scan" element={<ScanPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/about" element={<AboutPage />} />
         </Routes>
       </Layout>
-
-      {/* API Key Modal */}
-      {showKeyModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '20px' }}>
-          <div className="card" style={{ width: '100%', maxWidth: '400px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Key size={20} color="var(--primary)"/> Configure Vision AI Key
-            </h3>
-            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              Paste your Google AI Studio API key below. It will be stored only inside your browser's private local storage.
-            </p>
-            <input 
-              type="text" 
-              placeholder="Paste AQ... key here" 
-              value={inputKey} 
-              onChange={(e) => setInputKey(e.target.value)} 
-              style={{ padding: '10px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '0.85rem' }}
-            />
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '6px' }}>
-              <button 
-                onClick={() => setShowKeyModal(false)}
-                style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-muted)', borderRadius: '6px', cursor: 'pointer' }}
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={saveKey}
-                style={{ padding: '8px 18px', background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 700, cursor: 'pointer' }}
-              >
-                Save Key
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </BrowserRouter>
   );
 }
