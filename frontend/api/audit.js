@@ -1,3 +1,5 @@
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -48,57 +50,65 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
 }
 `;
 
-  // Fallback cascade to bypass momentary Google capacity spikes
-  const candidateModels = [
-    "gemini-3.8-flash",
-    "gemini-2.5-flash-latest",
-    "gemini-2.5-pro",
-    "gemini-flash-latest"
+  // Targeting models with distinct server pools
+  const models = [
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-flash",
+    "gemini-2.5-flash"
   ];
 
-  let lastErrorMessage = '';
+  let lastError = '';
 
-  for (const model of candidateModels) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: prompt },
-                { inlineData: { mimeType: 'image/jpeg', data: base64Image } }
-              ]
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: prompt },
+                  { inlineData: { mimeType: 'image/jpeg', data: base64Image } }
+                ]
+              }
+            ],
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: 'application/json',
+              maxOutputTokens: 1000
             }
-          ],
-          generationConfig: {
-            temperature: 0.1,
-            responseMimeType: 'application/json'
-          }
-        })
-      });
+          })
+        });
 
-      if (response.ok) {
         const data = await response.json();
-        const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (textOutput) {
-          return res.status(200).json(JSON.parse(textOutput));
+
+        if (response.ok) {
+          const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (textOutput) {
+            return res.status(200).json(JSON.parse(textOutput));
+          }
         }
-      } else {
-        const err = await response.json().catch(() => ({}));
-        lastErrorMessage = err.error?.message || `HTTP ${response.status}`;
-        // If it's high demand (503/429), the loop automatically proceeds to the next candidate model
-        continue;
+
+        lastError = data.error?.message || `HTTP ${response.status}`;
+        
+        // If throttled (503 high demand or 429 rate limit), pause briefly before retrying
+        if (response.status === 503 || response.status === 429) {
+          await sleep(1200);
+          continue;
+        } else {
+          break; // Break attempt loop on non-capacity errors and check next model
+        }
+      } catch (err) {
+        lastError = err.message;
+        await sleep(1000);
       }
-    } catch (e) {
-      lastErrorMessage = e.message;
-      continue;
     }
   }
 
-  return res.status(503).json({ 
-    error: `All Vision endpoints currently overloaded: ${lastErrorMessage}. Please re-scan in a moment.` 
+  return res.status(503).json({
+    error: `Model service temporarily saturated. Please retry your scan: ${lastError}`
   });
 }
