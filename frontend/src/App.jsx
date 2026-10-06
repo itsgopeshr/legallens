@@ -9,10 +9,8 @@ import {
 import jsPDF from 'jspdf';
 import confetti from 'canvas-confetti';
 
-// Inserted your API Key directly from your Google AI Studio credentials
-const GEMINI_API_KEY = "AQ.Ab8RN6LJK0hVOAK3HofPG6ZPTmLCrBD7IOzGCHIPDcU278zWkg";[cite: 26]
+const GEMINI_API_KEY = "AQ.Ab8RN6LJK0hVOAK3HofPG6ZPTmLCrBD7IOzGCHIPDcU278zWkg";
 
-// Client-side high-resolution image compression to stay within network limits
 const fileToBase64 = (file) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -48,7 +46,6 @@ const fileToBase64 = (file) => {
   });
 };
 
-// Vision LLM Auditor Engine
 const runGeminiVisionAudit = async (base64Image) => {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
@@ -111,7 +108,6 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
 
   const parsed = JSON.parse(textOutput);
 
-  // Compute USP fallback if mathematically possible
   let computedUsp = null;
   if (parsed.mrpValue && parsed.netQuantityValue && parsed.netQuantityValue > 0) {
     let unit = (parsed.netQuantityUnit || 'g').toLowerCase();
@@ -346,7 +342,6 @@ const ScanPage = () => {
                 </div>
               </div>
 
-              {/* Semantic Product Summary */}
               <div style={{ padding: '10px', background: 'var(--bg-input)', borderRadius: '8px', fontSize: '0.76rem', lineHeight: 1.45, color: 'var(--text-main)', borderLeft: '3px solid var(--primary)' }}>
                 <strong>Product Intelligence:</strong> {report.intelligence}
               </div>
@@ -358,7 +353,6 @@ const ScanPage = () => {
                 </div>
               )}
 
-              {/* Legal Metrology Verification Checklist */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-color)' }}><span>Maximum Retail Price (MRP):</span><strong>{report.checklist.mrp.value}</strong></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-color)' }}><span>Standard Net Quantity:</span><strong>{report.checklist.net_quantity.value}</strong></div>
@@ -424,4 +418,28 @@ const AboutPage = () => {
         {team.map((member, i) => (
           <div key={i} className="card" style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '12px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight
+              <span style={{ fontWeight: 800, fontSize: '0.95rem' }}>{member.name}</span>
+              <span style={{ fontSize: '0.62rem', background: member.role === 'LEADER' ? 'var(--primary)' : 'var(--bg-input)', color: member.role === 'LEADER' ? '#fff' : 'var(--text-muted)', padding: '3px 8px', borderRadius: '12px', fontWeight: 700 }}>{member.role.replace('_', ' ')}</span>
+            </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{member.email}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Layout>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/scan" element={<ScanPage />} />
+          <Route path="/history" element={<HistoryPage />} />
+          <Route path="/about" element={<AboutPage />} />
+        </Routes>
+      </Layout>
+    </BrowserRouter>
+  );
+}
