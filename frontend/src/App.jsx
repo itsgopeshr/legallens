@@ -9,7 +9,8 @@ import {
 import jsPDF from 'jspdf';
 import confetti from 'canvas-confetti';
 
-const GEMINI_API_KEY = "AQ.Ab8RN6LJK0hVOAK3HofPG6ZPTmLCrBD7IOzGCHIPDcU278zWkg";
+// Active Google AI Studio Key
+const GEMINI_API_KEY = "AQ.Ab8RN6l4RaAz39mPpwmBmeT-1fAWGqNZtTfSUWQGeebMKMv3Ng";
 
 const fileToBase64 = (file) => {
   return new Promise((resolve, reject) => {
@@ -47,6 +48,7 @@ const fileToBase64 = (file) => {
 };
 
 const runGeminiVisionAudit = async (base64Image) => {
+  // Use native Generative Language API endpoint
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
   const prompt = `
@@ -91,9 +93,13 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
     }
   };
 
+  // Passing x-goog-api-key header satisfies the new AQ. auth specification
   const res = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'x-goog-api-key': GEMINI_API_KEY
+    },
     body: JSON.stringify(payload)
   });
 
