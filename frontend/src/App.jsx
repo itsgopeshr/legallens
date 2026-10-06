@@ -47,7 +47,10 @@ const fileToBase64 = (file) => {
 };
 
 const runGeminiVisionAudit = async (base64Image) => {
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  // Try current default flash model, with automatic fallback
+  const models = ["gemini-2.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro-latest"];
+  let textOutput = null;
+  let lastError = null;
 
   const prompt = `
 You are a senior enforcement officer under the Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011) in India.
@@ -91,20 +94,31 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
     }
   };
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  for (const model of models) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || `API Error: HTTP ${res.status}`);
+      if (res.ok) {
+        const data = await res.json();
+        textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (textOutput) break;
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        lastError = errData?.error?.message || `HTTP ${res.status}`;
+      }
+    } catch (e) {
+      lastError = e.message;
+    }
   }
 
-  const data = await res.json();
-  const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!textOutput) throw new Error("No output received from the Vision AI.");
+  if (!textOutput) {
+    throw new Error(lastError || "Could not reach Vision models.");
+  }
 
   const parsed = JSON.parse(textOutput);
 
