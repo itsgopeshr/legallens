@@ -46,6 +46,8 @@ const fileToBase64 = (file) => {
 
 const runGeminiVisionAudit = async (base64Image, apiKey) => {
   const cleanKey = apiKey.trim();
+
+  // Pure endpoint without ?key= parameter to allow Bearer authentication
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;
 
   const prompt = `
@@ -90,10 +92,12 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
     }
   };
 
+  // Provide both Bearer and x-goog-api-key headers without URL parameters
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',
+      'Authorization': `Bearer ${cleanKey}`,
       'x-goog-api-key': cleanKey
     },
     body: JSON.stringify(payload)
