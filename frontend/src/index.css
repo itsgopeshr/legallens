@@ -30,115 +30,37 @@
   --warning: #f59e0b;
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-  font-family: 'Inter', sans-serif;
-  -webkit-tap-highlight-color: transparent;
-}
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+body { background-color: var(--bg-main); color: var(--text-main); transition: all 0.3s ease; overflow-x: hidden; }
 
-body {
-  background-color: var(--bg-main);
-  color: var(--text-main);
-  transition: background-color 0.3s ease, color 0.3s ease;
-  overflow-x: hidden;
-}
+#root { max-width: 600px; margin: 0 auto; min-height: 100vh; background-color: var(--bg-main); position: relative; box-shadow: 0 0 30px rgba(0,0,0,0.1); }
+@media (min-width: 768px) { #root { border-left: 1px solid var(--border-color); border-right: 1px solid var(--border-color); } }
 
-/* Responsive Container for Laptop/Desktop */
-#root {
-  max-width: 600px;
-  margin: 0 auto;
-  min-height: 100vh;
-  background-color: var(--bg-main);
-  box-shadow: 0 0 20px rgba(0,0,0,0.05);
-  position: relative;
-}
+.card { background: var(--bg-card); border-radius: 12px; padding: 16px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); transition: transform 0.2s ease; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.spinner { animation: spin 1s linear infinite; }
+@keyframes spin { 100% { transform: rotate(360deg); } }
 
-@media (min-width: 768px) {
-  #root {
-    border-left: 1px solid var(--border-color);
-    border-right: 1px solid var(--border-color);
-  }
-}
-
-.card {
-  background: var(--bg-card);
-  border-radius: 12px;
-  padding: 16px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-  border: 1px solid var(--border-color);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.badge {
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.badge-pass {
-  background: var(--success-bg);
-  color: var(--success);
-}
-
-.badge-fail {
-  background: var(--danger-bg);
-  color: var(--danger);
-}
-
-.spinner {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  100% { transform: rotate(360deg); }
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-}
-
-/* --- Scanner 3D Animations --- */
+/* 3D Laser Animation */
 @keyframes scanLaser {
   0% { top: 0%; opacity: 0.8; }
   50% { top: 96%; opacity: 1; }
   100% { top: 0%; opacity: 0.8; }
 }
-
 .scanner-laser {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 3px;
+  position: absolute; left: 0; right: 0; height: 3px;
   background: linear-gradient(90deg, transparent, #3b82f6, #60a5fa, #3b82f6, transparent);
-  box-shadow: 0 0 16px 3px rgba(59, 130, 246, 0.75);
-  animation: scanLaser 1.8s ease-in-out infinite;
-  z-index: 10;
+  box-shadow: 0 0 15px 3px rgba(59, 130, 246, 0.6);
+  animation: scanLaser 2s ease-in-out infinite; z-index: 10;
 }
-
 .scanner-grid {
-  position: absolute;
-  inset: 0;
-  background-image: 
-    linear-gradient(rgba(59, 130, 246, 0.12) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(59, 130, 246, 0.12) 1px, transparent 1px);
+  position: absolute; inset: 0; pointer-events: none; z-index: 5;
+  background-image: linear-gradient(rgba(59, 130, 246, 0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(59, 130, 246, 0.1) 1px, transparent 1px);
   background-size: 20px 20px;
-  pointer-events: none;
-  z-index: 5;
 }
+.custom-scrollbar::-webkit-scrollbar { width: 6px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
 
-/* Custom Scrollbar for OCR Text Views */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 4px;
-}
+/* Skeleton Loader */
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+.skeleton { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; background: var(--border-color); border-radius: 4px; height: 12px; margin-bottom: 6px; }
