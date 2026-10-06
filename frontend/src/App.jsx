@@ -4,13 +4,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Camera, Upload, Moon, Sun, ShieldCheck, HeartPulse, 
   Info, Home, RefreshCw, CheckCircle2, AlertTriangle,
-  Globe, History, Download, FileDown, ExternalLink
+  Globe, History, FileDown, ExternalLink
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import confetti from 'canvas-confetti';
 import Tesseract from 'tesseract.js';
 
-// --- Client-Side Image Resizer & Enhancer ---
+// --- Client-Side Image Preprocessing ---
 const compressImage = (file) => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -26,7 +26,8 @@ const compressImage = (file) => {
         canvas.height = scaleSize < 1 ? img.height * scaleSize : img.height;
         
         const ctx = canvas.getContext('2d');
-        ctx.filter = 'contrast(1.3) brightness(1.1) grayscale(1)';
+        // Aggressive contrast to cut through glossy plastic glare
+        ctx.filter = 'contrast(1.5) brightness(1.1) grayscale(100%)';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob((blob) => resolve(blob ? new File([blob], "capture.jpg", { type: "image/jpeg" }) : file), 'image/jpeg', 0.9);
       };
@@ -35,26 +36,49 @@ const compressImage = (file) => {
   });
 };
 
-// --- Real-Time Wikipedia OSINT Crawler ---
+// --- Flawless OSINT Web Crawler with OCR Autocorrect ---
 const fetchLiveWebData = async (text) => {
-  const stopwords = ['INGREDIENTS', 'AQUA', 'WATER', 'MRP', 'NET', 'QTY', 'VOL', 'USE', 'BEFORE', 'BATCH', 'MFG', 'PRICE', 'CONSUMER', 'CARE', 'LTD', 'PVT', 'INDIA', 'LIMITED'];
-  const words = text.toUpperCase().match(/\b[A-Z]{5,}\b/g) || [];
-  const keywords = [...new Set(words.filter(w => !stopwords.includes(w)))].slice(0, 3);
+  // 1. The "Boring Word" Filter: Ignore generic packaging terms so we only get real ingredients
+  const stopwords = [
+    'NUTRITION', 'NUTRITIONAL', 'INFORMATION', 'INGREDIENTS', 'AQUA', 'WATER', 'MRP', 'NET', 'QTY', 'VOL', 
+    'USE', 'BEFORE', 'BATCH', 'MFG', 'PRICE', 'CONSUMER', 'CARE', 'LTD', 'PVT', 'INDIA', 'LIMITED', 
+    'SERVE', 'SERVING', 'PACK', 'TOTAL', 'MANUFACTURED', 'MARKETED', 'REGD', 'OFFICE', 'DETAILS', 
+    'COMPOSITION', 'APPROX', 'VALUE', 'DIETARY', 'RECOMMENDED', 'ALLOWANCE', 'ENERGY', 'PROTEIN', 
+    'CARBOHYDRATE', 'SUGARS', 'FAT', 'SATURATED', 'TRANS', 'CHOLESTEROL', 'STORE', 'COOL', 'DRY', 
+    'PLACE', 'AWAY', 'SUNLIGHT', 'KCAL', 'GMS', 'WEIGHT', 'VOLUME', 'TAXES', 'INCLUSIVE', 'PRODUCTS'
+  ];
+
+  // Clean text and extract words longer than 5 letters
+  const rawWords = text.toUpperCase().replace(/[^A-Z]/g, ' ').split(/\s+/).filter(w => w.length > 5);
+  
+  // Filter out the boring words to leave only chemicals, brands, and ingredients
+  const keywords = [...new Set(rawWords.filter(w => !stopwords.includes(w)))].slice(0, 3);
   
   if (keywords.length === 0) return [];
   const results = [];
   
   for (const keyword of keywords) {
     try {
-      const res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${keyword.toLowerCase()}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.extract) {
-          results.push({
-            title: data.title,
-            body: data.extract,
-            link: data.content_urls?.desktop?.page || '#'
-          });
+      // 2. OCR Autocorrect: Ping Wikipedia's search engine to fix typos (e.g. "PHOSPHONSS" -> "Phosphorus")
+      const searchRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${keyword}&utf8=&format=json&origin=*`);
+      const searchData = await searchRes.json();
+
+      if (searchData.query && searchData.query.search.length > 0) {
+        // Get the properly spelled title from Wikipedia
+        const autocorrectedTitle = searchData.query.search[0].title;
+
+        // 3. Fetch the actual scientific definition
+        const summaryRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(autocorrectedTitle)}`);
+        if (summaryRes.ok) {
+          const summaryData = await summaryRes.json();
+          // Ensure we don't push duplicates
+          if (summaryData.extract && !results.some(r => r.title === summaryData.title)) {
+            results.push({
+              title: summaryData.title,
+              body: summaryData.extract.substring(0, 220) + '...',
+              link: summaryData.content_urls?.desktop?.page || '#'
+            });
+          }
         }
       }
     } catch (e) { console.warn("OSINT Crawler skipped:", keyword); }
@@ -65,30 +89,30 @@ const fetchLiveWebData = async (text) => {
 // --- On-Device Rules Engine ---
 const analyzeLabelJS = async (rawText) => {
   let text = rawText.replace(/\n/g, " ").toUpperCase();
+  // Fix common Tesseract currency misreads
   text = text.replace(/[\?*€]/g, '₹').replace(/\bE(\d{2,4})\b/g, '₹$1');
 
   let mrpVal = null, netQtyVal = null, netQtyUnit = null, declaredVal = null, declaredUspStr = null, mfgDate = null;
 
-  // MRP
-  const mrpMatch = text.match(/(?:MRP|M\.R\.P\.?|MAX\.?\s*RETAIL\s*PRICE)\D{0,10}(?:RS\.?|₹)?\s*(\d{2,5}(?:\.\d{1,2})?)/) || 
-                   text.match(/(?:₹|RS\.?)\s*[:=.]?\s*(\d{2,5}(?:\.\d{1,2})?)/) || 
+  // Ultra-Fuzzy MRP Matcher
+  const mrpMatch = text.match(/(?:MRP|M\.R\.P\.?|RETAIL\s*PRICE)?\D{0,10}(?:RS\.?|₹|R\$)\s*[A-Z]?[:=.]?\s*(\d{2,5}(?:\.\d{1,2})?)/) || 
                    text.match(/\b(\d{2,5})\s*\/-/);
   if (mrpMatch) mrpVal = parseFloat(mrpMatch[1]);
 
-  // Quantity
+  // Quantity Matcher (Filters out nutritional tables)
   const qtyMatch = text.match(/(?:NET\s*(?:WT|QTY|VOL|VOLUME)?[:.]?\s*)(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\b/) || 
                    text.match(/[\^#]?\s*(\d+(?:\.\d+)?)\s*(G|GM|GMS|ML|KG|L)\s*(?:NET|VOL|QTY)?\b/) || 
                    text.match(/\b(\d{2,4})\s*(ML|G|GM)\b/);
   
   if (qtyMatch) {
-    const context = text.substring(Math.max(0, qtyMatch.index - 15), qtyMatch.index);
-    if (!context.includes('SERVE') && !context.includes('ENERGY')) {
+    const context = text.substring(Math.max(0, qtyMatch.index - 20), qtyMatch.index);
+    if (!context.includes('SERVE') && !context.includes('ENERGY') && !context.includes('PER PACK')) {
       netQtyVal = parseFloat(qtyMatch[1]);
       netQtyUnit = qtyMatch[2].toLowerCase().replace('gms', 'g').replace('gm', 'g');
     }
   }
 
-  // USP
+  // USP Matcher
   let calculatedUsp = null, expectedUspStr = null;
   if (mrpVal && netQtyVal && netQtyVal > 0) {
     const baseUnit = netQtyUnit === 'g' ? 'g' : 'ml';
@@ -101,7 +125,7 @@ const analyzeLabelJS = async (rawText) => {
     declaredUspStr = `₹${declaredVal.toFixed(2)}/${uspMatch[2].toLowerCase()}`;
   }
 
-  // Dates
+  // Dates Matcher
   const dateMatch = text.match(/\b(0[1-9]|1[0-2])[\/\-](\d{2,4})\b/) || text.match(/\b(BSTN\w+|LOT\w+|B\.\s*NO\w*)\b/);
   if (dateMatch) mfgDate = dateMatch[0];
 
@@ -112,15 +136,16 @@ const analyzeLabelJS = async (rawText) => {
   else if (/(SUGAR|CARBOHYDRATE|PROTEIN|FAT|KCAL|ENERGY|INGREDIENTS|FSSAI|SUCROSE|DEXTROSE)/.test(text)) category = "food";
 
   const violations = [];
-  if (!mrpVal) violations.push("Rule 6(1)(e): Maximum Retail Price (MRP) missing or illegible.");
+  if (!mrpVal) violations.push("Rule 6(1)(e): Maximum Retail Price (MRP) missing or obscured by glare.");
   if (!netQtyVal) violations.push("Rule 6(1)(b): Standard Net Quantity declaration missing.");
   if (mrpVal && netQtyVal) {
-    if (!declaredUspStr) violations.push(`G.S.R. 226(E): Unit Sale Price not explicitly stated (Computed: ${expectedUspStr}).`);
+    if (!declaredUspStr) violations.push(`G.S.R. 226(E): Unit Sale Price not explicitly stated (Expected: ${expectedUspStr}).`);
     else if (declaredVal && Math.abs(declaredVal - calculatedUsp) > 0.06) violations.push(`G.S.R. 226(E): USP mismatch (Declared: ${declaredUspStr}, True: ${expectedUspStr}).`);
   }
   if (!mfgDate) violations.push("Rule 6(1)(d): Month/Year of packing or Batch No. not detected.");
   if (!careMatch) violations.push("Rule 6(2): Consumer care contact channel not found.");
 
+  // TRIGGER THE WEB CRAWLER
   const webData = await fetchLiveWebData(text);
   const status = violations.length === 0 ? "COMPLIANT" : "NON-COMPLIANT";
 
@@ -149,8 +174,8 @@ const Layout = ({ children }) => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <ShieldCheck size={26} color="var(--primary)" />
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ fontSize: '1.15rem', fontWeight: 800 }}>LegalLens AI</span><span style={{ fontSize: '0.62rem', background: 'var(--primary)', color: '#fff', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>EDGE</span></div>
-            <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>On-Device OSINT Scanner</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ fontSize: '1.15rem', fontWeight: 800 }}>LegalLens AI</span><span style={{ fontSize: '0.62rem', background: 'var(--primary)', color: '#fff', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>OSINT</span></div>
+            <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>On-Device Web Crawler</p>
           </div>
         </div>
         <button onClick={() => setIsDark(!isDark)} style={{ background: 'var(--bg-input)', border: 'none', color: 'var(--text-main)', padding: '8px', borderRadius: '50%', cursor: 'pointer' }}>{isDark ? <Sun size={20} /> : <Moon size={20} />}</button>
@@ -184,8 +209,8 @@ const HomePage = () => {
   return (
     <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div className="card" style={{ textAlign: 'center', padding: '26px 18px', background: 'linear-gradient(135deg, var(--bg-card) 0%, var(--bg-input) 100%)' }}>
-        <h2 style={{ fontSize: '1.35rem', fontWeight: 800, marginBottom: '6px' }}>Edge Compliance OCR</h2>
-        <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Zero latency. Works offline. Real web intelligence.</p>
+        <h2 style={{ fontSize: '1.35rem', fontWeight: 800, marginBottom: '6px' }}>Live Product Auditing</h2>
+        <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Scan any packaging. Missing data is fetched live from Wikipedia OSINT.</p>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
         <input type="file" accept="image/*" capture="environment" id="home-camera" style={{ display: 'none' }} onChange={handleSelection} />
@@ -233,7 +258,7 @@ const ScanPage = () => {
         logger: m => {
           if (m.status === 'recognizing text') {
             setProgress(m.progress);
-            setStatusMsg(`Extracting Text: ${Math.round(m.progress * 100)}%`);
+            setStatusMsg(`Scanning Package: ${Math.round(m.progress * 100)}%`);
           }
         }
       });
@@ -293,7 +318,7 @@ const ScanPage = () => {
         <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 20px', textAlign: 'center', borderStyle: 'dashed', borderWidth: '2px' }}>
           <Camera size={48} color="var(--primary)" style={{ marginBottom: '16px' }} />
           <h3 style={{ marginBottom: '8px' }}>Scan Packaging</h3>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '24px' }}>Edge processing guarantees zero network latency.</p>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '24px' }}>Ensure good lighting. Avoid glare on plastic wrappers.</p>
           <div style={{ display: 'flex', gap: '12px' }}>
             <input type="file" accept="image/*" capture="environment" onChange={handleManualSelection} style={{ display: 'none' }} id="cam-input-scan" />
             <label htmlFor="cam-input-scan" style={{ background: 'var(--primary)', color: '#fff', padding: '10px 18px', borderRadius: '8px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}><Camera size={18}/> Camera</label>
@@ -328,14 +353,16 @@ const ScanPage = () => {
 
               {activeTab === 'web' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px' }}><Globe size={16} color="var(--primary)" /> Open Source Intelligence (Wikipedia)</div>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px' }}><Globe size={16} color="var(--primary)" /> Real-Time Intelligence</div>
+                  <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Using Wikipedia's NLP Search to autocorrect OCR typos and pull accurate chemical/brand data.</p>
+                  
                   {report.web_intelligence.length > 0 ? report.web_intelligence.map((item, idx) => (
                     <div key={idx} style={{ padding: '10px', background: 'var(--bg-input)', borderLeft: '3px solid var(--primary)', borderRadius: '6px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <strong style={{ fontSize: '0.8rem' }}>{item.title}</strong>
                       <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{item.body}</p>
                       <a href={item.link} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px', textDecoration: 'none', fontWeight: 600, marginTop: '4px' }}>Verify Source <ExternalLink size={12} /></a>
                     </div>
-                  )) : <div style={{ fontSize: '0.75rem', color: 'var(--warning)', padding: '10px', background: 'var(--bg-input)', borderRadius: '6px' }}>Could not extract reliable search keywords.</div>}
+                  )) : <div style={{ fontSize: '0.75rem', color: 'var(--warning)', padding: '10px', background: 'var(--bg-input)', borderRadius: '6px' }}>Could not extract reliable search keywords. Tip: Try flattening the plastic wrapper to reduce light glare.</div>}
                 </div>
               )}
 
@@ -346,8 +373,9 @@ const ScanPage = () => {
                   </div>
                   {report.violations.length > 0 && (
                      <div style={{ fontSize: '0.75rem', color: 'var(--danger)', display: 'flex', flexDirection: 'column', gap: '4px', background: 'var(--danger-bg)', padding: '10px', borderRadius: '8px' }}>
-                       <strong style={{marginBottom: '4px'}}>Contraventions:</strong>
+                       <strong style={{marginBottom: '4px'}}>Contraventions / Notes:</strong>
                        {report.violations.map((v, i) => <span key={i}>• {v}</span>)}
+                       <span style={{ marginTop: '4px', color: '#b91c1c', fontStyle: 'italic' }}>Note: If values are missing, try scanning the flat bottom panel where prices are ink-stamped.</span>
                      </div>
                   )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem' }}>
