@@ -4,12 +4,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Camera, Upload, Moon, Sun, ShieldCheck, 
   Info, Home, CheckCircle2, AlertTriangle,
-  History, FileDown, Sparkles
+  History, FileDown, Sparkles, Key
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import confetti from 'canvas-confetti';
-
-const GEMINI_API_KEY = "AIzaSyBCoYMapi_Gwx09ZGiBLLaDL_BBGUqPOJg";
 
 const fileToBase64 = (file) => {
   return new Promise((resolve, reject) => {
@@ -46,8 +44,9 @@ const fileToBase64 = (file) => {
   });
 };
 
-const runGeminiVisionAudit = async (base64Image) => {
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${GEMINI_API_KEY}`;
+const runGeminiVisionAudit = async (base64Image, apiKey) => {
+  // Use the active model path
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
   const prompt = `
 You are a senior enforcement officer under the Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011) in India.
@@ -131,7 +130,8 @@ Return ONLY a valid JSON object matching this schema without markdown fences:
     intelligence: parsed.productIntelligence || "Product verified against Legal Metrology Schedule."
   };
 };
-const Layout = ({ children }) => {
+
+const Layout = ({ children, onOpenKeyModal }) => {
   const [isDark, setIsDark] = useState(false);
   const location = useLocation();
 
@@ -152,9 +152,14 @@ const Layout = ({ children }) => {
             <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>SIH26034 Metrology Auditor</p>
           </div>
         </div>
-        <button onClick={() => setIsDark(!isDark)} style={{ background: 'var(--bg-input)', border: 'none', color: 'var(--text-main)', padding: '8px', borderRadius: '50%', cursor: 'pointer' }}>
-          {isDark ? <Sun size={20} /> : <Moon size={20} />}
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={onOpenKeyModal} title="Configure API Key" style={{ background: 'var(--bg-input)', border: 'none', color: 'var(--text-main)', padding: '8px', borderRadius: '50%', cursor: 'pointer' }}>
+            <Key size={18} />
+          </button>
+          <button onClick={() => setIsDark(!isDark)} style={{ background: 'var(--bg-input)', border: 'none', color: 'var(--text-main)', padding: '8px', borderRadius: '50%', cursor: 'pointer' }}>
+            {isDark ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+        </div>
       </header>
 
       <main style={{ flex: 1, position: 'relative' }}>
@@ -222,7 +227,7 @@ const HomePage = () => {
   );
 };
 
-const ScanPage = () => {
+const ScanPage = ({ apiKey, onRequireKey }) => {
   const location = useLocation();
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -245,6 +250,11 @@ const ScanPage = () => {
   };
 
   const executeScan = async (file) => {
+    if (!apiKey) {
+      onRequireKey();
+      return;
+    }
+
     setPreview(URL.createObjectURL(file));
     setLoading(true);
     setReport(null);
@@ -254,7 +264,7 @@ const ScanPage = () => {
       const base64Data = await fileToBase64(file);
       setStatusMsg('AI Vision Auditing in Progress...');
       
-      const auditResult = await runGeminiVisionAudit(base64Data);
+      const auditResult = await runGeminiVisionAudit(base64Data, apiKey);
       setReport(auditResult);
       saveAuditLog(auditResult);
 
@@ -429,16 +439,61 @@ const AboutPage = () => {
 };
 
 export default function App() {
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const [inputKey, setInputKey] = useState(apiKey);
+
+  const saveKey = () => {
+    localStorage.setItem('gemini_api_key', inputKey.trim());
+    setApiKey(inputKey.trim());
+    setShowKeyModal(false);
+  };
+
   return (
     <BrowserRouter>
-      <Layout>
+      <Layout onOpenKeyModal={() => setShowKeyModal(true)}>
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/scan" element={<ScanPage />} />
+          <Route path="/scan" element={<ScanPage apiKey={apiKey} onRequireKey={() => setShowKeyModal(true)} />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/about" element={<AboutPage />} />
         </Routes>
       </Layout>
+
+      {/* API Key Modal */}
+      {showKeyModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '20px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '400px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Key size={20} color="var(--primary)"/> Configure Vision AI Key
+            </h3>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              Paste your newly generated Google AI Studio API key here. It will be stored safely in your phone's browser memory only.
+            </p>
+            <input 
+              type="password" 
+              placeholder="AIzaSy..." 
+              value={inputKey} 
+              onChange={(e) => setInputKey(e.target.value)} 
+              style={{ padding: '10px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-main)', fontSize: '0.85rem' }}
+            />
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '6px' }}>
+              <button 
+                onClick={() => setShowKeyModal(false)}
+                style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-muted)', borderRadius: '6px', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={saveKey}
+                style={{ padding: '8px 18px', background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Save Key
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </BrowserRouter>
   );
 }
